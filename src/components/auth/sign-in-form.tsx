@@ -19,8 +19,6 @@ import { Controller, useForm } from 'react-hook-form';
 import { z as zod } from 'zod';
 
 import { paths } from '@/paths';
-import { authClient } from '@/lib/auth/client';
-import { useUser } from '@/hooks/use-user';
 
 const schema = zod.object({
   email: zod.string().min(1, { message: 'Email is required' }).email(),
@@ -29,45 +27,85 @@ const schema = zod.object({
 
 type Values = zod.infer<typeof schema>;
 
-const defaultValues = { email: 'supremo@gmail.com', password: 'Admin123' } satisfies Values;
-
 export function SignInForm(): React.JSX.Element {
   const router = useRouter();
-
-  const { checkSession } = useUser();
-
-  const [showPassword, setShowPassword] = React.useState<boolean>();
-
-  const [isPending, setIsPending] = React.useState<boolean>(false);
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [isPending, setIsPending] = React.useState(false);
+  const [step, setStep] = React.useState<'login' | 'verify'>('login');
+  const [code, setCode] = React.useState('');
+  const [email, setEmail] = React.useState('');
+  const [error, setError] = React.useState<string | null>(null);
+  const [message, setMessage] = React.useState<string | null>(null);
 
   const {
     control,
     handleSubmit,
-    setError,
+    setError: setFormError,
     formState: { errors },
-  } = useForm<Values>({ defaultValues, resolver: zodResolver(schema) });
-
-  const onSubmit = React.useCallback(
-    async (values: Values): Promise<void> => {
-      setIsPending(true);
-
-      const { error } = await authClient.signInWithPassword(values);
-
-      if (error) {
-        setError('root', { type: 'server', message: error });
-        setIsPending(false);
-        return;
-      }
-
-      // Refresh the auth state
-      await checkSession?.();
-
-      // UserProvider, for this case, will not refresh the router
-      // After refresh, GuestGuard will handle the redirect
-      router.refresh();
+    getValues,
+  } = useForm<Values>({
+    defaultValues: {
+      email: 'acederajustinn@gmail.com',
+      password: 'Admin123',
     },
-    [checkSession, router, setError]
-  );
+    resolver: zodResolver(schema),
+  });
+
+  const handleLogin = async (values: Values) => {
+    setIsPending(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setFormError('root', { type: 'server', message: data.error });
+      } else {
+        setEmail(values.email);
+        setStep('verify');
+        setMessage('A verification code has been sent to your email.');
+      }
+    } catch (err: any) {
+      setError('Login failed. Please try again.');
+    }
+
+    setIsPending(false);
+  };
+
+  const handleCodeVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsPending(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const res = await fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || 'Invalid verification code.');
+      } else {
+        setMessage('Login successful!');
+        router.refresh(); // Optionally redirect
+      }
+    } catch (err: any) {
+      setError('Verification failed.');
+    }
+
+    setIsPending(false);
+  };
 
   return (
     <Stack spacing={4}>
@@ -80,72 +118,92 @@ export function SignInForm(): React.JSX.Element {
           </Link>
         </Typography>
       </Stack>
-      <form onSubmit={handleSubmit(onSubmit)}>
-        <Stack spacing={2}>
-          <Controller
-            control={control}
-            name="email"
-            render={({ field }) => (
-              <FormControl error={Boolean(errors.email)}>
-                <InputLabel>Email address</InputLabel>
-                <OutlinedInput {...field} label="Email address" type="email" />
-                {errors.email ? <FormHelperText>{errors.email.message}</FormHelperText> : null}
-              </FormControl>
-            )}
-          />
-          <Controller
-            control={control}
-            name="password"
-            render={({ field }) => (
-              <FormControl error={Boolean(errors.password)}>
-                <InputLabel>Password</InputLabel>
-                <OutlinedInput
-                  {...field}
-                  endAdornment={
-                    showPassword ? (
-                      <EyeIcon
-                        cursor="pointer"
-                        fontSize="var(--icon-fontSize-md)"
-                        onClick={(): void => {
-                          setShowPassword(false);
-                        }}
-                      />
-                    ) : (
-                      <EyeSlashIcon
-                        cursor="pointer"
-                        fontSize="var(--icon-fontSize-md)"
-                        onClick={(): void => {
-                          setShowPassword(true);
-                        }}
-                      />
-                    )
-                  }
-                  label="Password"
-                  type={showPassword ? 'text' : 'password'}
-                />
-                {errors.password ? <FormHelperText>{errors.password.message}</FormHelperText> : null}
-              </FormControl>
-            )}
-          />
-          <div>
-            <Link component={RouterLink} href={paths.auth.resetPassword} variant="subtitle2">
-              Forgot password?
-            </Link>
-          </div>
-          {errors.root ? <Alert color="error">{errors.root.message}</Alert> : null}
-          <Button disabled={isPending} type="submit" variant="contained">
-            Sign in
-          </Button>
-        </Stack>
-      </form>
+
+      {step === 'login' ? (
+        <form onSubmit={handleSubmit(handleLogin)}>
+          <Stack spacing={2}>
+            <Controller
+              control={control}
+              name="email"
+              render={({ field }) => (
+                <FormControl error={Boolean(errors.email)}>
+                  <InputLabel>Email address</InputLabel>
+                  <OutlinedInput {...field} label="Email address" type="email" />
+                  {errors.email ? <FormHelperText>{errors.email.message}</FormHelperText> : null}
+                </FormControl>
+              )}
+            />
+            <Controller
+              control={control}
+              name="password"
+              render={({ field }) => (
+                <FormControl error={Boolean(errors.password)}>
+                  <InputLabel>Password</InputLabel>
+                  <OutlinedInput
+                    {...field}
+                    endAdornment={
+                      showPassword ? (
+                        <EyeIcon
+                          cursor="pointer"
+                          fontSize="var(--icon-fontSize-md)"
+                          onClick={() => setShowPassword(false)}
+                        />
+                      ) : (
+                        <EyeSlashIcon
+                          cursor="pointer"
+                          fontSize="var(--icon-fontSize-md)"
+                          onClick={() => setShowPassword(true)}
+                        />
+                      )
+                    }
+                    label="Password"
+                    type={showPassword ? 'text' : 'password'}
+                  />
+                  {errors.password ? <FormHelperText>{errors.password.message}</FormHelperText> : null}
+                </FormControl>
+              )}
+            />
+            <div>
+              <Link component={RouterLink} href={paths.auth.resetPassword} variant="subtitle2">
+                Forgot password?
+              </Link>
+            </div>
+            {errors.root ? <Alert severity="error">{errors.root.message}</Alert> : null}
+            {error && <Alert severity="error">{error}</Alert>}
+            {message && <Alert severity="success">{message}</Alert>}
+            <Button disabled={isPending} type="submit" variant="contained">
+              Sign in
+            </Button>
+          </Stack>
+        </form>
+      ) : (
+        <form onSubmit={handleCodeVerify}>
+          <Stack spacing={2}>
+            <FormControl>
+              <InputLabel>Verification Code</InputLabel>
+              <OutlinedInput
+                label="Verification Code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            </FormControl>
+            {error && <Alert severity="error">{error}</Alert>}
+            {message && <Alert severity="success">{message}</Alert>}
+            <Button disabled={isPending} type="submit" variant="contained">
+              Verify Code
+            </Button>
+          </Stack>
+        </form>
+      )}
+
       <Alert color="warning">
         Use{' '}
         <Typography component="span" sx={{ fontWeight: 700 }} variant="inherit">
-        supremo@gmail.com
+          acederajustinn@gmail.com
         </Typography>{' '}
         with password{' '}
         <Typography component="span" sx={{ fontWeight: 700 }} variant="inherit">
-        Admin123
+          Admin123
         </Typography>
       </Alert>
     </Stack>
